@@ -36,7 +36,7 @@ jobs:
         with:
           go-version: "1.26"
 
-      - name: Build and install gittuf
+      - name: Build and install binaries
         run: |
           make just-install
           echo "$(go env GOPATH)/bin" >> $GITHUB_PATH
@@ -95,15 +95,33 @@ jobs:
       - name: Start HTTP server
         if: matrix.handle == 'http'
         run: |
-          cd /tmp/remote.git
-          git update-server-info
           cd /tmp
-          python3 -m http.server 8000 &
-          sleep 2
+          
+          cat << 'EOF' > serve.go
+          package main
+          import (
+            "net/http"
+            "net/http/cgi"
+          )
+          func main() {
+            h := &cgi.Handler{
+              Path: "/usr/lib/git-core/git-http-backend",
+              Env: []string{
+                "GIT_PROJECT_ROOT=/tmp/remote.git",
+                "GIT_HTTP_EXPORT_ALL=1",
+              },
+            }
+            http.ListenAndServe(":8000", h)
+          }
+          EOF
+          
+          go run serve.go &
+          sleep 3
 
       - name: Setup SSH server
         if: matrix.handle == 'ssh'
         run: |
+          sudo apt-get update
           sudo apt-get install -y openssh-server
           sudo service ssh start
 
@@ -118,11 +136,13 @@ jobs:
         run: |
           cd /tmp
 
+          export GIT_TERMINAL_PROMPT=0
+
           if [ "${{ matrix.handle }}" = "http" ]; then
             URL="gittuf::http://localhost:8000/remote.git"
           else
             export GIT_SSH_COMMAND="ssh -o StrictHostKeyChecking=no"
-            URL="gittuf::ssh://localhost/tmp/remote.git"
+            URL="gittuf::localhost:/tmp/remote.git"
           fi
 
           echo "Using URL: $URL"
