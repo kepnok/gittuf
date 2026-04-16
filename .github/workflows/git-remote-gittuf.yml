@@ -92,30 +92,21 @@ jobs:
             git update-ref refs/gittuf/test HEAD
           fi
 
-      - name: Start HTTP server
+      - name: Start Smart HTTP server
         if: matrix.handle == 'http'
         run: |
           cd /tmp
+          mkdir -p cgi-bin
           
-          cat << 'EOF' > serve.go
-          package main
-          import (
-            "net/http"
-            "net/http/cgi"
-          )
-          func main() {
-            h := &cgi.Handler{
-              Path: "/usr/lib/git-core/git-http-backend",
-              Env: []string{
-                "GIT_PROJECT_ROOT=/tmp/remote.git",
-                "GIT_HTTP_EXPORT_ALL=1",
-              },
-            }
-            http.ListenAndServe(":8000", h)
-          }
+          cat << 'EOF' > cgi-bin/git-http-backend
+          #!/bin/bash
+          export GIT_PROJECT_ROOT=/tmp
+          export GIT_HTTP_EXPORT_ALL=1
+          exec $(git --exec-path)/git-http-backend
           EOF
+          chmod +x cgi-bin/git-http-backend
           
-          go run serve.go &
+          python3 -m http.server --bind 127.0.0.1 --cgi 8000 > /tmp/server.log 2>&1 &
           sleep 3
 
       - name: Setup SSH server
@@ -139,7 +130,7 @@ jobs:
           export GIT_TERMINAL_PROMPT=0
 
           if [ "${{ matrix.handle }}" = "http" ]; then
-            URL="gittuf::http://localhost:8000/remote.git"
+            URL="gittuf::http://127.0.0.1:8000/cgi-bin/git-http-backend/remote.git"
           else
             export GIT_SSH_COMMAND="ssh -o StrictHostKeyChecking=no"
             URL="gittuf::localhost:/tmp/remote.git"
@@ -147,11 +138,17 @@ jobs:
 
           echo "Using URL: $URL"
 
-          git clone "$URL" cloned
-          cd cloned
+          git clone --progress "$URL" cloned || { echo "Clone failed! Server logs:"; cat /tmp/server.log; exit 1; }
+          
+          cd /tmp/local
+          echo "trigger new packfile" >> file.txt
+          git commit -am "force fetch"
+          git push origin main
 
-          git fetch
-          git pull || true
+          cd /tmp/cloned
+          
+          git fetch --progress
+          git pull --progress || true
 
           echo "change" >> file.txt
           git add .
