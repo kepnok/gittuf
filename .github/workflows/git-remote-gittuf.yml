@@ -1,0 +1,139 @@
+name: gittuf transport
+
+on:
+  pull_request:
+    paths:
+      - "internal/git-remote-gittuf/**"
+      - ".github/workflows/git-remote-gittuf.yml"
+
+  push:
+    branches: ["**"]
+    paths:
+      - "internal/git-remote-gittuf/**"
+      - ".github/workflows/git-remote-gittuf.yml"
+
+jobs:
+  transport:
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        handle: [http, ssh]
+        scenario:
+          - remote_has_policy
+          - local_has_policy
+          - divergent_policy
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          persist-credentials: false
+
+      - name: Install Go
+        uses: actions/setup-go@4b73464bb391d4059bd26b0524d20df3927bd417
+        with:
+          go-version: "1.26"
+
+      - name: Install gittuf
+        uses: gittuf/gittuf-installer@3408aeb2a325ce88ff482b3b964322cd9d6bea22
+
+      - name: Setup test repos
+        run: |
+          mkdir /tmp/remote.git
+          git init --bare /tmp/remote.git
+
+          mkdir /tmp/local
+          cd /tmp/local
+          git init
+          echo "hello" > file.txt
+          git add .
+          git commit -m "init"
+
+      - name: Prepare scenario
+        run: |
+          # Remote has gittuf refs
+          if [ "${{ matrix.scenario }}" = "remote_has_policy" ]; then
+            git clone /tmp/remote.git /tmp/temp
+            cd /tmp/temp
+            git commit --allow-empty -m "remote gittuf"
+            git update-ref refs/gittuf/test HEAD
+            git push origin refs/gittuf/test
+          fi
+
+          # Local has gittuf refs
+          if [ "${{ matrix.scenario }}" = "local_has_policy" ]; then
+            cd /tmp/local
+            git commit --allow-empty -m "local gittuf"
+            git update-ref refs/gittuf/test HEAD
+          fi
+
+          # Divergent case
+          if [ "${{ matrix.scenario }}" = "divergent_policy" ]; then
+            # Remote
+            git clone /tmp/remote.git /tmp/temp
+            cd /tmp/temp
+            git commit --allow-empty -m "remote version"
+            git update-ref refs/gittuf/test HEAD
+            git push origin refs/gittuf/test
+
+            # Local
+            cd /tmp/local
+            git commit --allow-empty -m "local version"
+            git update-ref refs/gittuf/test HEAD
+          fi
+
+      - name: Start HTTP server
+        if: matrix.handle == 'http'
+        run: |
+          cd /tmp/remote.git
+          git update-server-info
+          cd /tmp
+          python3 -m http.server 8000 &
+          sleep 2
+
+      - name: Setup SSH server
+        if: matrix.handle == 'ssh'
+        run: |
+          sudo apt-get install -y openssh-server
+          sudo service ssh start
+
+          mkdir -p ~/.ssh
+          ssh-keygen -t rsa -N "" -f ~/.ssh/id_rsa
+          cat ~/.ssh/id_rsa.pub >> ~/.ssh/authorized_keys
+          chmod 600 ~/.ssh/authorized_keys
+
+          echo "StrictHostKeyChecking no" >> ~/.ssh/config
+
+      - name: Run clone/fetch/push
+        run: |
+          cd /tmp
+
+          if [ "${{ matrix.handle }}" = "http" ]; then
+            URL="gittuf::http://localhost:8000/remote.git"
+          else
+            export GIT_SSH_COMMAND="ssh -o StrictHostKeyChecking=no"
+            URL="gittuf::ssh://localhost/tmp/remote.git"
+          fi
+
+          echo "Using URL: $URL"
+
+          git clone "$URL" cloned
+          cd cloned
+
+          git fetch
+          git pull || true
+
+          echo "change" >> file.txt
+          git add .
+          git commit -m "update"
+          git push origin HEAD || true
+
+      - name: Verify gittuf refs
+        run: |
+          cd /tmp/cloned
+          echo "Checking gittuf refs..."
+
+          git show-ref | grep refs/gittuf || (echo "Missing gittuf refs" && exit 1)
+          echo "gittuf refs found"
