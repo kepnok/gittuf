@@ -54,14 +54,19 @@ jobs:
 
           git -C /tmp/remote.git config http.receivepack true
 
-          chmod -R 777 /tmp/remote.git
-
           mkdir /tmp/local
           cd /tmp/local
           git init
           echo "hello" > file.txt
           git add .
           git commit -m "init"
+          
+          git update-ref refs/gittuf/reference-state-log HEAD
+          
+          git remote add origin /tmp/remote.git
+          git push origin main refs/gittuf/reference-state-log
+          
+          chmod -R 777 /tmp/remote.git
 
       - name: Prepare scenario
         run: |
