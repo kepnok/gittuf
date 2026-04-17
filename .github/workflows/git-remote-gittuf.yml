@@ -172,10 +172,12 @@ jobs:
           fi
 
           cd /tmp/local
-          git remote add origin /tmp/remote.git || true
+          
+          git remote set-url origin "$URL" || git remote add origin "$URL"
 
           echo "trigger new packfile" >> file.txt
           git commit -am "force fetch"
+          
           timeout 60 git push origin main
 
           cd /tmp/cloned
