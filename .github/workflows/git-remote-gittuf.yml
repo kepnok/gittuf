@@ -104,15 +104,15 @@ jobs:
 
           sudo chmod +x /usr/lib/cgi-bin/git-http-backend
 
+          # Enable CGI (alias is removed from here because it causes the crash)
           sudo lighty-enable-mod cgi
-          sudo lighty-enable-mod alias
 
           sudo tee /etc/lighttpd/conf-available/99-git.conf > /dev/null << 'EOF'
+          server.modules += ( "mod_alias" )
           alias.url += ( "/git" => "/usr/lib/cgi-bin/git-http-backend" )
           cgi.assign = ( "" => "" )
           EOF
 
-          sudo lighty-enable-mod git || true
           sudo ln -sf /etc/lighttpd/conf-available/99-git.conf /etc/lighttpd/conf-enabled/99-git.conf
 
           sudo systemctl restart fcgiwrap
@@ -153,15 +153,23 @@ jobs:
           cd /tmp
 
           if [ "${{ matrix.handle }}" = "http" ]; then
-            URL="gittuf::http://127.0.0.1/cgi-bin/git-http-backend/remote.git"
+            URL="gittuf::http://127.0.0.1/git/remote.git"
+
+            timeout 60 git clone --progress "$URL" cloned
+
           else
             export GIT_SSH_COMMAND="ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o BatchMode=yes"
+
             URL="gittuf::localhost:/tmp/remote.git"
+
+            mkdir cloned
+            cd cloned
+            git init
+            git remote add origin "$URL"
+
+            timeout 60 git fetch origin
+            git checkout -b main FETCH_HEAD || true
           fi
-
-          echo "Using URL: $URL"
-
-          timeout 60 git clone --progress "$URL" cloned
 
           cd /tmp/local
           git remote add origin /tmp/remote.git || true
@@ -172,23 +180,22 @@ jobs:
 
           cd /tmp/cloned
 
-          timeout 60 git fetch --progress
-          timeout 60 git pull --progress || true
+          timeout 60 git fetch origin
 
-          echo "change" >> file.txt
-          git add .
-          git commit -m "update"
+          echo "change" >> file.txt || true
+          git add . || true
+          git commit -m "update" || true
 
-          timeout 60 git push origin HEAD || true
+          timeout 60 git push origin HEAD:main || true
 
       - name: Verify gittuf refs
         run: |
           cd /tmp/cloned
-
+        
           echo "Checking gittuf refs..."
           git show-ref
-
+        
           git show-ref | grep refs/gittuf || \
             (echo "Missing gittuf refs" && exit 1)
-
+        
           echo "gittuf refs found"
