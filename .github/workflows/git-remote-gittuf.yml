@@ -93,26 +93,33 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y lighttpd fcgiwrap
 
-          sudo mkdir -p /var/www/cgi-bin
+          sudo mkdir -p /usr/lib/cgi-bin
 
-          sudo tee /var/www/cgi-bin/git-http-backend > /dev/null << 'EOF'
+          sudo tee /usr/lib/cgi-bin/git-http-backend > /dev/null << 'EOF'
           #!/bin/bash
           export GIT_PROJECT_ROOT=/tmp
           export GIT_HTTP_EXPORT_ALL=1
           exec $(git --exec-path)/git-http-backend
           EOF
 
-          sudo chmod +x /var/www/cgi-bin/git-http-backend
+          sudo chmod +x /usr/lib/cgi-bin/git-http-backend
 
-          sudo tee /etc/lighttpd/conf-enabled/10-git.conf > /dev/null << 'EOF'
-          server.modules += ( "mod_cgi" )
+          sudo lighty-enable-mod cgi
+          sudo lighty-enable-mod alias
+
+          sudo tee /etc/lighttpd/conf-available/99-git.conf > /dev/null << 'EOF'
+          alias.url += ( "/git" => "/usr/lib/cgi-bin/git-http-backend" )
           cgi.assign = ( "" => "" )
-          server.document-root = "/var/www/html"
           EOF
 
-          sudo service fcgiwrap start
-          sudo service lighttpd restart
+          sudo lighty-enable-mod git || true
+          sudo ln -sf /etc/lighttpd/conf-available/99-git.conf /etc/lighttpd/conf-enabled/99-git.conf
+
+          sudo systemctl restart fcgiwrap
+          sudo systemctl restart lighttpd
+
           sleep 3
+          curl -I http://127.0.0.1/git
 
       - name: Setup SSH server
         if: matrix.handle == 'ssh'
@@ -149,7 +156,7 @@ jobs:
             URL="gittuf::http://127.0.0.1/cgi-bin/git-http-backend/remote.git"
           else
             export GIT_SSH_COMMAND="ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o BatchMode=yes"
-            URL="gittuf::ssh://localhost/tmp/remote.git"
+            URL="gittuf::localhost:/tmp/remote.git"
           fi
 
           echo "Using URL: $URL"
