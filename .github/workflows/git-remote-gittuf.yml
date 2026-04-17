@@ -54,6 +54,8 @@ jobs:
 
           git -C /tmp/remote.git config http.receivepack true
 
+          chmod -R 777 /tmp/remote.git
+
           mkdir /tmp/local
           cd /tmp/local
           git init
