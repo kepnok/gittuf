@@ -77,6 +77,7 @@ jobs:
             cd /tmp/local
             git commit --allow-empty -m "local gittuf"
             git update-ref refs/gittuf/test HEAD
+            git update-ref refs/gittuf/reference-state-log HEAD
           fi
 
           if [ "${{ matrix.scenario }}" = "divergent_policy" ]; then
@@ -89,6 +90,7 @@ jobs:
             cd /tmp/local
             git commit --allow-empty -m "local version"
             git update-ref refs/gittuf/test HEAD
+            git update-ref refs/gittuf/reference-state-log HEAD
           fi
 
       - name: Start Smart HTTP server
