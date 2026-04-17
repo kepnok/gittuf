@@ -61,7 +61,6 @@ jobs:
 
       - name: Prepare scenario
         run: |
-          # Remote has gittuf refs
           if [ "${{ matrix.scenario }}" = "remote_has_policy" ]; then
             git clone /tmp/remote.git /tmp/temp
             cd /tmp/temp
@@ -70,23 +69,19 @@ jobs:
             git push origin refs/gittuf/test
           fi
 
-          # Local has gittuf refs
           if [ "${{ matrix.scenario }}" = "local_has_policy" ]; then
             cd /tmp/local
             git commit --allow-empty -m "local gittuf"
             git update-ref refs/gittuf/test HEAD
           fi
 
-          # Divergent case
           if [ "${{ matrix.scenario }}" = "divergent_policy" ]; then
-            # Remote
             git clone /tmp/remote.git /tmp/temp
             cd /tmp/temp
             git commit --allow-empty -m "remote version"
             git update-ref refs/gittuf/test HEAD
             git push origin refs/gittuf/test
 
-            # Local
             cd /tmp/local
             git commit --allow-empty -m "local version"
             git update-ref refs/gittuf/test HEAD
@@ -95,18 +90,28 @@ jobs:
       - name: Start Smart HTTP server
         if: matrix.handle == 'http'
         run: |
-          cd /tmp
-          mkdir -p cgi-bin
-          
-          cat << 'EOF' > cgi-bin/git-http-backend
+          sudo apt-get update
+          sudo apt-get install -y lighttpd fcgiwrap
+
+          sudo mkdir -p /var/www/cgi-bin
+
+          sudo tee /var/www/cgi-bin/git-http-backend > /dev/null << 'EOF'
           #!/bin/bash
           export GIT_PROJECT_ROOT=/tmp
           export GIT_HTTP_EXPORT_ALL=1
           exec $(git --exec-path)/git-http-backend
           EOF
-          chmod +x cgi-bin/git-http-backend
-          
-          python3 -m http.server --bind 127.0.0.1 --cgi 8000 > /tmp/server.log 2>&1 &
+
+          sudo chmod +x /var/www/cgi-bin/git-http-backend
+
+          sudo tee /etc/lighttpd/conf-enabled/10-git.conf > /dev/null << 'EOF'
+          server.modules += ( "mod_cgi" )
+          cgi.assign = ( "" => "" )
+          server.document-root = "/var/www/html"
+          EOF
+
+          sudo service fcgiwrap start
+          sudo service lighttpd restart
           sleep 3
 
       - name: Setup SSH server
@@ -114,51 +119,69 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y openssh-server
+
           sudo service ssh start
 
           mkdir -p ~/.ssh
           ssh-keygen -t rsa -N "" -f ~/.ssh/id_rsa
+
           cat ~/.ssh/id_rsa.pub >> ~/.ssh/authorized_keys
           chmod 600 ~/.ssh/authorized_keys
 
-          echo "StrictHostKeyChecking no" >> ~/.ssh/config
+          {
+            echo "Host localhost"
+            echo "  StrictHostKeyChecking no"
+            echo "  UserKnownHostsFile /dev/null"
+            echo "  BatchMode yes"
+          } >> ~/.ssh/config
 
       - name: Run clone/fetch/push
         run: |
-          cd /tmp
+          set -euxo pipefail
 
           export GIT_TERMINAL_PROMPT=0
+          export GIT_TRACE=1
+          export GIT_CURL_VERBOSE=1
+
+          cd /tmp
 
           if [ "${{ matrix.handle }}" = "http" ]; then
-            URL="gittuf::http://127.0.0.1:8000/cgi-bin/git-http-backend/remote.git"
+            URL="gittuf::http://127.0.0.1/cgi-bin/git-http-backend/remote.git"
           else
-            export GIT_SSH_COMMAND="ssh -o StrictHostKeyChecking=no"
-            URL="gittuf::localhost:/tmp/remote.git"
+            export GIT_SSH_COMMAND="ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o BatchMode=yes"
+            URL="gittuf::ssh://localhost/tmp/remote.git"
           fi
 
           echo "Using URL: $URL"
 
-          git clone --progress "$URL" cloned || { echo "Clone failed! Server logs:"; cat /tmp/server.log; exit 1; }
-          
+          timeout 60 git clone --progress "$URL" cloned
+
           cd /tmp/local
+          git remote add origin /tmp/remote.git || true
+
           echo "trigger new packfile" >> file.txt
           git commit -am "force fetch"
-          git push origin main
+          timeout 60 git push origin main
 
           cd /tmp/cloned
-          
-          git fetch --progress
-          git pull --progress || true
+
+          timeout 60 git fetch --progress
+          timeout 60 git pull --progress || true
 
           echo "change" >> file.txt
           git add .
           git commit -m "update"
-          git push origin HEAD || true
+
+          timeout 60 git push origin HEAD || true
 
       - name: Verify gittuf refs
         run: |
           cd /tmp/cloned
-          echo "Checking gittuf refs..."
 
-          git show-ref | grep refs/gittuf || (echo "Missing gittuf refs" && exit 1)
+          echo "Checking gittuf refs..."
+          git show-ref
+
+          git show-ref | grep refs/gittuf || \
+            (echo "Missing gittuf refs" && exit 1)
+
           echo "gittuf refs found"
